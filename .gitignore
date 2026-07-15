@@ -7,7 +7,7 @@ __pycache__/
 .pytest_cache/
 
 # the portable brain — synced encrypted via exo sync, never via git
-state/
+/state/
 
 # real config holds secrets; config.example.yaml is the committed template
 config.yaml
