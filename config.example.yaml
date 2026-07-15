@@ -1,0 +1,217 @@
+# =====================================================================
+# Exocortex configuration.
+#
+#   copy config.example.yaml -> config.yaml   and edit.
+#
+# config.yaml is gitignored. Secrets may be pasted directly or written
+# as "env:VARNAME" to read from the environment at load time.
+# Relative paths resolve against the repo root; ~ expands to your home.
+# =====================================================================
+
+device_id: ""            # empty = this machine's hostname; tags every captured row
+
+# ---------------------------------------------------------------------
+# Multi-device (hub & spoke)
+# ---------------------------------------------------------------------
+# Exactly ONE machine is the hub: it runs the Telegram bot, the cycles, and
+# owns the canonical brain. Every other machine is a spoke: capture only —
+# it pushes encrypted batches that the hub merges nightly. A spoke refuses
+# to start the bot, run cycles, or pull/push the brain (structurally — this
+# is what prevents the two-bots-on-one-token failure).
+role: hub                # hub | spoke
+device_name: ""          # friendly name in provenance ("on laptop"); "" = hostname
+hub_name: ""             # which machine hosts the bot (named in spoke refusals)
+
+state_dir: "state"       # where the portable brain (exocortex.db) lives
+
+# ---------------------------------------------------------------------
+# Capture daemon
+# ---------------------------------------------------------------------
+capture:
+  window_poll_s: 3             # active-window title sampling interval (seconds)
+  clipboard_poll_s: 2          # clipboard change polling interval
+  clipboard_max_chars: 10000   # longer clipboard text is truncated before storage
+  watched_folders:             # file created/modified/deleted events from these trees
+    - "~/Documents"
+    - "~/Desktop"
+    # - "D:/my-projects"       # add your personal project dirs.
+    #                          # NEVER add company checkouts — and even if one
+    #                          # sneaks in, the firewall blocklist below wins.
+  flush_interval_s: 5          # batched-insert cadence (seconds)
+  flush_max_events: 100        # flush early when this many events are queued
+  browser_import:
+    enabled: true              # periodic import of NEW history entries
+    interval_hours: 6          # Chrome / Edge / Firefox profiles are auto-detected.
+                               # Imports pause during work mode, and anything you
+                               # browsed while it was on is skipped forever when
+                               # capture resumes — never imported later.
+
+# ---------------------------------------------------------------------
+# Work firewall  (safety-critical — read this section carefully)
+# ---------------------------------------------------------------------
+firewall:
+  # Hostnames where the daemon ALWAYS runs in work mode, permanently:
+  # only manual /log reflections are recorded, nothing else — regardless
+  # of any toggle. Add your company desktop's hostname BEFORE installing
+  # the daemon there.
+  work_mode_hosts: []
+  #  - "COMPANY-DESKTOP-NAME"
+
+  # Events matching any blocklist rule are dropped BEFORE touching disk.
+  # All matching is case-insensitive. FILL IN your employer's specifics —
+  # the entries below are common defaults + examples to replace.
+  blocklist:
+    paths:                     # directory prefixes; symlinks are resolved first
+      - "C:/work"              # EXAMPLE: company project checkout — replace
+      - "~/work"               # EXAMPLE
+      - "~/company"            # EXAMPLE
+    apps:                      # process executable names (".exe" optional)
+      - "teams"                # company chat/email apps — remove any you use personally
+      - "outlook"
+      - "slack"                # if your Slack is work-only, keep this
+    window_titles:             # glob patterns against window titles
+      - "*yourcompany*"        # REPLACE with your employer's name / product names
+      - "*jira*"
+      - "*confluence*"
+    url_patterns:              # applied to browser-history imports
+      - "*yourcompany.com*"    # REPLACE
+      - "*.atlassian.net*"
+      - "*.sharepoint.com*"
+      - "*mail.google.com/mail/u/1*"   # EXAMPLE: work Google account at index 1
+
+  # Titles matching these are STORED but tagged sensitivity=sensitive and
+  # never leave the machine: excluded from all LLM prompts and /ask results.
+  sensitive_titles:
+    - "*password*"
+    - "*bank*"
+    - "*incognito*"
+    - "*private browsing*"
+
+  # Clipboard text matching obvious secret patterns (API keys, JWTs,
+  # private key blocks) is redacted before storage. Leave on.
+  redact_secrets: true
+
+# ---------------------------------------------------------------------
+# Phase 2: two capture planes + auto-curriculum
+# ---------------------------------------------------------------------
+# Plane A — code/files. STRICT ALLOWLIST: git activity (and any future file
+# contents) are read ONLY from these paths. Not a blocklist: anything absent
+# is structurally unreadable, so employer code can't be captured by mistake.
+# Plane A data syncs normally with the rest of the brain.
+# Multi-device: key the list by device_name — absolute paths from one
+# machine are meaningless or dangerous on another, so each machine applies
+# ONLY its own entry (no entry = captures nothing, fails closed). The flat
+# single-machine list form still works.
+capture_code_from: {}
+#  laptop:
+#    - "d:/my-repo"
+#  desktop:
+#    - "e:/personal-projects"
+
+# Plane B — the research trail (browser history, search queries, AI prompts,
+# window titles, clipboard) is captured generally into state/local.db, which
+# is NEVER included in a sync bundle. That guarantee is structural (separate
+# file, never packaged) — there is nothing to configure here.
+
+curriculum:
+  trail_window_days: 14           # how much trail the nightly engine reads
+  review_intervals_days: [2, 4, 8, 16]   # spaced-repetition ladder (days)
+  weekly_question_day: "sun"      # weekly "what did you ship?" nudge
+  weekly_question_time: "19:00"
+
+voice:
+  whisper_model: "base"           # local voice transcription: tiny|base|small
+                                  # needs: uv sync --extra voice
+
+# ---------------------------------------------------------------------
+# Telegram bot (long-polling; needs no public IP)
+# ---------------------------------------------------------------------
+telegram:
+  bot_token: "env:EXO_TELEGRAM_TOKEN"   # from @BotFather, or paste directly
+  chat_id: ""              # YOUR numeric Telegram user id; the bot ignores everyone else.
+                           # Leave empty for first run — message the bot and it
+                           # replies with the id to paste here.
+
+# ---------------------------------------------------------------------
+# Model router + budget governor
+# ---------------------------------------------------------------------
+router:
+  monthly_budget_usd: 10.0   # governor refuses T2/T3 calls that would overshoot this
+  # Internal tasks name TIERS, never models. Each tier is a fallback chain:
+  # the first model that answers wins. Ids are LiteLLM ids (provider/model).
+  # Free-tier model names rotate over time — update these lists when a
+  # provider retires one; a dead entry just falls through to the next.
+  tiers:
+    T0_local: []             # reserved for local models (none in Phase 1)
+    T1_free:                 # bulk: summaries, extraction, tagging
+      - "gemini/gemini-2.5-flash"
+      - "groq/llama-3.3-70b-versatile"
+      - "openrouter/openai/gpt-oss-20b:free"
+    T2_workhorse:            # brief synthesis, /ask answers.
+      # All-free stack (slugs verified 2026-07-07; they churn — a dead entry
+      # falls through to the next). With a paid Anthropic key, put
+      # "anthropic/claude-sonnet-5" at the top of this list instead.
+      - "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
+      - "openrouter/openai/gpt-oss-120b:free"
+      - "openrouter/meta-llama/llama-3.3-70b-instruct:free"
+      - "nvidia_nim/meta/llama-3.3-70b-instruct"   # NVIDIA direct (one-time credits)
+      - "openrouter/openrouter/free"               # auto-router backstop
+    T3_reasoning: []         # empty = degrades to T2 automatically.
+      # With a paid key: ["anthropic/claude-opus-4-8"]
+  api_keys:                  # paste keys or point at env vars
+    anthropic: "env:ANTHROPIC_API_KEY"
+    gemini: "env:GEMINI_API_KEY"
+    groq: "env:GROQ_API_KEY"
+    openrouter: "env:OPENROUTER_API_KEY"
+    nvidia: "env:NVIDIA_NIM_API_KEY"    # nvapi-... from build.nvidia.com
+
+# ---------------------------------------------------------------------
+# Embeddings (local CPU, fastembed/ONNX; loaded only during batch jobs)
+# ---------------------------------------------------------------------
+embeddings:
+  enabled: true
+  model: "BAAI/bge-small-en-v1.5"   # ~130 MB on disk, downloaded on first use
+  cache_dir: ".cache/models"         # keep on D: — C: is nearly full
+
+# ---------------------------------------------------------------------
+# Claude Code plan-usage awareness
+# ---------------------------------------------------------------------
+claude_code:
+  transcripts_dir: "~/.claude/projects"   # where Claude Code writes session .jsonl files
+  weekly_token_budget: 0    # rough weekly token allowance of your plan, for burn-rate
+                            # advice in /budget. 0 = unknown (report usage only).
+
+# ---------------------------------------------------------------------
+# Nightly cycle + morning brief
+# ---------------------------------------------------------------------
+cycle:
+  run_time: "03:30"         # when the scheduler runs `exo cycle nightly`
+  brief_time: "07:00"       # when the scheduler runs `exo brief --send`
+  lookback_hours: 36        # life-stream window summarized each night
+
+crm:
+  stale_after_days: 14      # no touchpoint for this long -> follow-up alert
+
+# ---------------------------------------------------------------------
+# Encrypted sync (age-format encryption + rclone transport)
+# ---------------------------------------------------------------------
+sync:
+  remote: ""                # rclone remote:path, e.g. "gdrive:exocortex-brain".
+                            # Empty = `exo sync push` writes the encrypted bundle
+                            # to state/sync-out/ and you move it yourself.
+  passphrase: "env:EXO_SYNC_PASSPHRASE"   # encrypts the bundle; anyone with this
+                            # phrase + the file owns your brain. Use a long one.
+  keep_versions: 14         # timestamped copies retained on the remote
+  spoke_push_time: "03:00"  # spokes: daily queue push (before the hub's
+                            # 03:30 nightly merge). Batches land under
+                            # <remote>/spokes/<device>/ and are parked in
+                            # spokes/merged/ once the hub consumes them.
+
+# ---------------------------------------------------------------------
+# Obsidian vault export (`exo graph export`, also runs nightly)
+# ---------------------------------------------------------------------
+vault:
+  path: "d:/gravity-vault"  # keep it OUTSIDE the repo. Derived data: it
+                            # regenerates from the db and is never part of
+                            # sync bundles, so losing it costs nothing.
+  enabled: true             # false = skip the nightly export step

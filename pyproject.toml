@@ -1,0 +1,33 @@
+[project]
+name = "exocortex"
+version = "0.1.0"
+description = "Exocortex Phase 1 — personal agentic OS: capture, state, router, brief, sync"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6.0",
+    "litellm>=1.60",
+    "python-telegram-bot>=21.6",
+    "watchdog>=4.0",
+    "psutil>=5.9",
+    "pyperclip>=1.9",
+    "pyrage>=1.2",
+    "requests>=2.31",
+    "tenacity>=8.0",   # litellm's anthropic provider imports it lazily
+]
+
+[project.optional-dependencies]
+embeddings = ["fastembed>=0.5"]
+voice = ["faster-whisper>=1.0"]   # weekly voice-memo transcription (CPU)
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+exo = "exocortex.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

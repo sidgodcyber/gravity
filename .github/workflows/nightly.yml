@@ -1,0 +1,75 @@
+# OPTIONAL: nightly cycle in the cloud, operating ONLY on synced encrypted
+# state — useful when the laptop sleeps through 03:30. Disabled until you add
+# the secrets below (the job exits early without them):
+#   EXO_SYNC_PASSPHRASE, RCLONE_CONF (base64 of rclone.conf), EXO_SYNC_REMOTE,
+#   EXO_TELEGRAM_TOKEN, EXO_TELEGRAM_CHAT_ID,
+#   GEMINI_API_KEY / GROQ_API_KEY / ANTHROPIC_API_KEY (whichever tiers need)
+#
+# Note: this decrypts your state inside the runner for the duration of the
+# job. Use a private repo and decide for yourself if that trade is worth it.
+
+name: nightly-cycle
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 22 * * *"   # ~03:30 IST; adjust to your timezone (cron is UTC)
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check secrets present
+        id: gate
+        run: |
+          if [ -z "${{ secrets.EXO_SYNC_PASSPHRASE }}" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "secrets not configured — skipping (this is fine)"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.run == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          pip install -e .
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+          mkdir -p ~/.config/rclone
+          echo "${{ secrets.RCLONE_CONF }}" | base64 -d > ~/.config/rclone/rclone.conf
+
+      - name: Write config
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          cat > config.yaml <<'EOF'
+          sync:
+            remote: "env:EXO_SYNC_REMOTE"
+            passphrase: "env:EXO_SYNC_PASSPHRASE"
+          telegram:
+            bot_token: "env:EXO_TELEGRAM_TOKEN"
+            chat_id: "env:EXO_TELEGRAM_CHAT_ID"
+          capture:
+            browser_import: {enabled: false}
+          EOF
+
+      - name: Pull state, run cycle, push state
+        if: steps.gate.outputs.run == 'true'
+        env:
+          EXO_SYNC_PASSPHRASE: ${{ secrets.EXO_SYNC_PASSPHRASE }}
+          EXO_SYNC_REMOTE: ${{ secrets.EXO_SYNC_REMOTE }}
+          EXO_TELEGRAM_TOKEN: ${{ secrets.EXO_TELEGRAM_TOKEN }}
+          EXO_TELEGRAM_CHAT_ID: ${{ secrets.EXO_TELEGRAM_CHAT_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          exo sync pull --force
+          exo cycle nightly
+          exo sync push
